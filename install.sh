@@ -40,6 +40,17 @@ else
   log "Installing Tailscale…"
   curl -fsSL https://tailscale.com/install.sh | sh
 fi
+# Ensure the tailscaled daemon is running + enabled on boot (systemd hosts).
+# The installer usually does this, but not on every image — `tailscale up`
+# fails with "failed to connect to local tailscaled" if it isn't running.
+if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | grep -q '^tailscaled\.service'; then
+  if ! systemctl is-active --quiet tailscaled; then
+    log "Starting tailscaled daemon…"
+    sudo systemctl enable --now tailscaled || warn "Could not start tailscaled; run: sudo systemctl enable --now tailscaled"
+  fi
+else
+  warn "systemd/tailscaled service not detected — start the daemon manually before 'tailscale up'."
+fi
 
 # --- 1b. Node.js + npm ------------------------------------------------------
 if command -v npm >/dev/null 2>&1; then
@@ -117,6 +128,8 @@ cat <<'EOF'
 1) Connect this machine to your Tailscale network:
      sudo tailscale up
    (opens a login URL — authorize it in your Tailscale account)
+   If it says "failed to connect to local tailscaled":
+     sudo systemctl enable --now tailscaled && sudo tailscale up
 
 2) Configure the Hermes agent:
      hermes setup            # or: hermes --help
