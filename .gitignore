@@ -1,0 +1,10 @@
+# Never commit secrets or agent state
+.env
+*.env
+.hermes/
+auth.json
+*.pem
+*.key
+__pycache__/
+*.pyc
+.DS_Store

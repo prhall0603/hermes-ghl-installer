@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+#
+# hermes-ghl-installer
+# One-shot setup for a clean, headless Ubuntu server:
+#   1. Tailscale       (mesh VPN)
+#   2. Hermes agent    (NousResearch)
+#   3. GoHighLevel CRM skill (contacts, social posting, calendar)
+#
+# Usage (one line, as the target user — NOT root):
+#   curl -fsSL https://raw.githubusercontent.com/prhall0603/hermes-ghl-installer/main/install.sh | bash
+#
+# Idempotent: safe to re-run. Ships credential-free — you supply your own
+# Tailscale auth and GoHighLevel token after install (see the printed steps).
+
+set -euo pipefail
+
+REPO_RAW="https://raw.githubusercontent.com/prhall0603/hermes-ghl-installer/main"
+REPO_GIT="https://github.com/prhall0603/hermes-ghl-installer.git"
+SKILLS_SUBPATH="skills/productivity/gohighlevel-crm"
+HERMES_SKILLS_DIR="${HOME}/.hermes/skills/productivity"
+
+log()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
+die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
+
+[ "$(id -u)" -eq 0 ] && die "Run as your normal user, not root. Hermes installs into \$HOME. Re-run without sudo."
+command -v curl >/dev/null 2>&1 || die "curl is required. Install it: sudo apt-get update && sudo apt-get install -y curl"
+
+# --- 0. base packages -------------------------------------------------------
+log "Ensuring base packages (git, ca-certificates)…"
+if command -v apt-get >/dev/null 2>&1; then
+  sudo apt-get update -y -qq || warn "apt-get update failed; continuing"
+  sudo apt-get install -y -qq git ca-certificates || warn "apt-get install failed; continuing"
+fi
+
+# --- 1. Tailscale -----------------------------------------------------------
+if command -v tailscale >/dev/null 2>&1; then
+  log "Tailscale already installed ($(tailscale version | head -1)); skipping."
+else
+  log "Installing Tailscale…"
+  curl -fsSL https://tailscale.com/install.sh | sh
+fi
+
+# --- 2. Hermes agent --------------------------------------------------------
+if [ -d "${HOME}/.hermes/hermes-agent/.git" ] || command -v hermes >/dev/null 2>&1; then
+  log "Hermes already installed; skipping installer."
+else
+  log "Installing Hermes agent…"
+  curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+fi
+
+# --- 3. GoHighLevel CRM skill ----------------------------------------------
+log "Installing GoHighLevel CRM skill…"
+mkdir -p "${HERMES_SKILLS_DIR}"
+TMP="$(mktemp -d)"
+trap 'rm -rf "${TMP}"' EXIT
+
+if git clone --depth 1 "${REPO_GIT}" "${TMP}/repo" >/dev/null 2>&1; then
+  cp -R "${TMP}/repo/${SKILLS_SUBPATH}" "${HERMES_SKILLS_DIR}/"
+else
+  warn "git clone failed (private repo without creds?). Falling back to raw download."
+  DEST="${HERMES_SKILLS_DIR}/gohighlevel-crm"
+  mkdir -p "${DEST}/references"
+  curl -fsSL "${REPO_RAW}/${SKILLS_SUBPATH}/SKILL.md" -o "${DEST}/SKILL.md"
+  for f in appointment-reminders sub-account-creation social-media-copywriting-rules \
+           cron-reliability-and-fallbacks openrouter-resale-pricing ssh-password-pty; do
+    curl -fsSL "${REPO_RAW}/${SKILLS_SUBPATH}/references/${f}.md" -o "${DEST}/references/${f}.md"
+  done
+fi
+log "Skill installed at ${HERMES_SKILLS_DIR}/gohighlevel-crm"
+
+# --- done -------------------------------------------------------------------
+cat <<'EOF'
+
+============================================================
+  Install complete. Three manual steps remain (all yours):
+============================================================
+
+1) Connect this machine to your Tailscale network:
+     sudo tailscale up
+   (opens a login URL — authorize it in your Tailscale account)
+
+2) Configure the Hermes agent:
+     hermes setup            # or: hermes --help
+   Provide your own model / API key here.
+
+3) Add your GoHighLevel credentials to ~/.hermes/.env :
+     GHL_PIT=<your Private Integration Token>
+     GHL_LOCATION_ID=<your sub-account/location id>
+     GHL_WEBSITE=<your website, optional post CTA>
+
+   PIT scopes needed: contacts.readonly, contacts.write,
+   socialplanner/post.write, medias.write, calendars.readonly
+   (Settings -> Private Integrations in GoHighLevel.)
+
+The GHL skill ships with NO credentials — it reads the values above
+at runtime. See the skill's SKILL.md for full API usage.
+============================================================
+EOF
