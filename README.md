@@ -12,6 +12,7 @@ existing account.
 | Component | Source |
 |---|---|
 | **Tailscale** | `https://tailscale.com/install.sh` |
+| **Node.js LTS + npm** | NodeSource (`https://deb.nodesource.com/setup_lts.x`) |
 | **Hermes agent** | `https://hermes-agent.nousresearch.com/install.sh` (NousResearch) |
 | **GoHighLevel CRM skill** | `skills/productivity/gohighlevel-crm/` in this repo → `~/.hermes/skills/productivity/` |
 

@@ -41,6 +41,19 @@ else
   curl -fsSL https://tailscale.com/install.sh | sh
 fi
 
+# --- 1b. Node.js + npm ------------------------------------------------------
+if command -v npm >/dev/null 2>&1; then
+  log "npm already installed (npm $(npm -v), node $(node -v 2>/dev/null)); skipping."
+else
+  log "Installing Node.js LTS + npm…"
+  if command -v apt-get >/dev/null 2>&1; then
+    curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+    sudo apt-get install -y nodejs
+  else
+    warn "apt-get not found; install Node.js/npm manually for your distro."
+  fi
+fi
+
 # --- 2. Hermes agent --------------------------------------------------------
 if [ -d "${HOME}/.hermes/hermes-agent/.git" ] || command -v hermes >/dev/null 2>&1; then
   log "Hermes already installed; skipping installer."
