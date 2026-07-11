@@ -82,12 +82,37 @@ else
 fi
 log "Skill installed at ${HERMES_SKILLS_DIR}/gohighlevel-crm"
 
+# --- 4. Ensure ~/.local/bin on PATH -----------------------------------------
+# Hermes drops its launcher in ~/.local/bin. Ubuntu only adds that dir to PATH
+# at login, and only if it already existed — so a fresh install in this session
+# leaves `hermes` off PATH until the guard below is in the shell rc.
+LOCAL_BIN="${HOME}/.local/bin"
+PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+for rc in "${HOME}/.bashrc" "${HOME}/.profile"; do
+  [ -f "${rc}" ] || touch "${rc}"
+  if ! grep -qF '.local/bin' "${rc}"; then
+    printf '\n# Added by hermes-ghl-installer\n%s\n' "${PATH_LINE}" >> "${rc}"
+    log "Added ~/.local/bin to PATH in ${rc}"
+  fi
+done
+# Make hermes usable in THIS shell too (harmless if already present).
+case ":${PATH}:" in
+  *":${LOCAL_BIN}:"*) : ;;
+  *) export PATH="${LOCAL_BIN}:${PATH}" ;;
+esac
+command -v hermes >/dev/null 2>&1 && log "hermes on PATH: $(command -v hermes)" \
+  || warn "hermes not found on PATH — open a new shell or run: source ~/.bashrc"
+
 # --- done -------------------------------------------------------------------
 cat <<'EOF'
 
 ============================================================
-  Install complete. Three manual steps remain (all yours):
+  Install complete. Reload your shell first, then 3 steps:
 ============================================================
+
+0) Pick up the updated PATH (or just open a new shell):
+     source ~/.bashrc
+   Verify:  command -v hermes
 
 1) Connect this machine to your Tailscale network:
      sudo tailscale up
