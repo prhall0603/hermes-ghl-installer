@@ -48,6 +48,30 @@ The script is idempotent — re-running skips anything already present.
    `socialplanner/post.write`, `medias.write`, `calendars.readonly`
    (GoHighLevel → Settings → Private Integrations).
 
+## Auto-start & power recovery
+
+The installer registers a **systemd user service** (`hermes-gateway`) with
+`Restart=always` and enables **linger**, so Hermes:
+
+- starts automatically at boot (no login required),
+- restarts automatically if it crashes.
+
+Manage it:
+```bash
+systemctl --user status  hermes-gateway
+systemctl --user restart hermes-gateway
+journalctl --user -u hermes-gateway -f
+```
+
+**Powering the machine back on after an outage** is a firmware/host setting the
+OS can't control:
+
+- **Bare metal:** BIOS/UEFI → *Restore on AC Power Loss* = **On** (or *Last State*).
+- **Proxmox / VM / LXC:** enable **Start at boot** for the guest.
+
+With that set, the box powers up after an outage and the service brings Hermes
+back on its own.
+
 ## The GoHighLevel skill
 
 `skills/productivity/gohighlevel-crm/` teaches the agent to:

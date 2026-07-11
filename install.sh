@@ -133,6 +133,54 @@ esac
 command -v hermes >/dev/null 2>&1 && log "hermes on PATH: $(command -v hermes)" \
   || warn "hermes not found on PATH — open a new shell or run: source ~/.bashrc"
 
+# --- 5. Auto-start Hermes on boot (survives reboot / power loss) -------------
+# Installs a systemd *user* service that runs the Hermes gateway with
+# Restart=always, and enables linger so it starts at boot WITHOUT a login.
+HERMES_HOME="${HOME}/.hermes"
+VENV="${HERMES_HOME}/hermes-agent/venv"
+UNIT_DIR="${HOME}/.config/systemd/user"
+if command -v systemctl >/dev/null 2>&1 && [ -x "${VENV}/bin/python" ]; then
+  log "Installing hermes-gateway systemd user service…"
+  mkdir -p "${UNIT_DIR}"
+  cat > "${UNIT_DIR}/hermes-gateway.service" <<EOF
+[Unit]
+Description=Hermes Agent Gateway - Messaging Platform Integration
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=${VENV}/bin/python -m hermes_cli.main gateway run
+WorkingDirectory=${HERMES_HOME}
+Environment="PATH=${VENV}/bin:${HERMES_HOME}/hermes-agent/node_modules/.bin:${HERMES_HOME}/node/bin:${HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="VIRTUAL_ENV=${VENV}"
+Environment="HERMES_HOME=${HERMES_HOME}"
+Restart=always
+RestartSec=5
+RestartForceExitStatus=75
+KillMode=mixed
+KillSignal=SIGTERM
+ExecReload=/bin/kill -USR1 \$MAINPID
+ExecStopPost=-${VENV}/bin/python -m gateway.cgroup_cleanup
+TimeoutStopSec=210
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+EOF
+  systemctl --user daemon-reload 2>/dev/null || true
+  systemctl --user enable --now hermes-gateway 2>/dev/null \
+    || warn "Could not enable hermes-gateway user service; check: systemctl --user status hermes-gateway"
+  # Linger = user services start at boot without an interactive login.
+  sudo loginctl enable-linger "${USER}" 2>/dev/null \
+    || warn "Could not enable linger; run: sudo loginctl enable-linger ${USER}"
+  log "Hermes will auto-start on boot and restart on crash."
+else
+  warn "Skipped Hermes autostart (no systemd or venv missing). Configure a service manually."
+fi
+
 # --- done -------------------------------------------------------------------
 cat <<'EOF'
 
@@ -165,5 +213,20 @@ cat <<'EOF'
 
 The GHL skill ships with NO credentials — it reads the values above
 at runtime. See the skill's SKILL.md for full API usage.
-============================================================
+
+------------------------------------------------------------
+  Auto-start on boot: ENABLED (systemd user service +
+  linger). Manage it with:
+     systemctl --user status  hermes-gateway
+     systemctl --user restart hermes-gateway
+     journalctl --user -u hermes-gateway -f
+
+  POWER-LOSS AUTO-POWER-ON is a firmware/host setting the OS
+  cannot set for you:
+   * Bare metal: BIOS/UEFI -> "Restore on AC Power Loss" =
+     On (or Last State).
+   * Proxmox/VM/LXC: enable "Start at boot" for this guest.
+  With that set, the box powers up after an outage and this
+  service brings Hermes back automatically.
+------------------------------------------------------------
 EOF
