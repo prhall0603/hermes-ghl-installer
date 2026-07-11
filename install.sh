@@ -40,14 +40,33 @@ else
   log "Installing Tailscale…"
   curl -fsSL https://tailscale.com/install.sh | sh
 fi
+# TUN check: bare metal has /dev/net/tun; LXC/Docker containers often don't,
+# and tailscaled crashes there with 'CreateTUN failed; /dev/net/tun does not
+# exist'. Try to load the module; if still absent, fall back to userspace
+# networking so the node still joins the tailnet.
+if [ ! -c /dev/net/tun ]; then
+  sudo modprobe tun 2>/dev/null || true
+fi
+if [ ! -c /dev/net/tun ]; then
+  warn "No /dev/net/tun (container without TUN) — enabling Tailscale userspace networking."
+  warn "  Tradeoff: no subnet-router/exit-node. For full mode, pass TUN into the container from the host."
+  DEFAULTS="/etc/default/tailscaled"
+  sudo touch "${DEFAULTS}"
+  if grep -q '^FLAGS=' "${DEFAULTS}" 2>/dev/null; then
+    grep -q -- '--tun=userspace-networking' "${DEFAULTS}" \
+      || sudo sed -i 's|^FLAGS=.*|FLAGS="--tun=userspace-networking"|' "${DEFAULTS}"
+  else
+    echo 'FLAGS="--tun=userspace-networking"' | sudo tee -a "${DEFAULTS}" >/dev/null
+  fi
+fi
+
 # Ensure the tailscaled daemon is running + enabled on boot (systemd hosts).
 # The installer usually does this, but not on every image — `tailscale up`
 # fails with "failed to connect to local tailscaled" if it isn't running.
 if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | grep -q '^tailscaled\.service'; then
-  if ! systemctl is-active --quiet tailscaled; then
-    log "Starting tailscaled daemon…"
-    sudo systemctl enable --now tailscaled || warn "Could not start tailscaled; run: sudo systemctl enable --now tailscaled"
-  fi
+  log "Enabling + (re)starting tailscaled daemon…"
+  sudo systemctl enable tailscaled >/dev/null 2>&1 || true
+  sudo systemctl restart tailscaled || warn "Could not start tailscaled; run: sudo systemctl restart tailscaled"
 else
   warn "systemd/tailscaled service not detected — start the daemon manually before 'tailscale up'."
 fi

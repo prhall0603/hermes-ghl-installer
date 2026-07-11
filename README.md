@@ -70,6 +70,21 @@ replaced with placeholders (`$GHL_PIT`, `$GHL_LOCATION_ID`, `<YOUR_...>`).
 - Ubuntu (headless is fine), `curl`, `sudo`, outbound internet.
 - `git` (installed by the script if missing).
 
+### Containers (LXC / Docker)
+
+Bare metal and full VMs work with no extra steps. Containers often lack
+`/dev/net/tun`, which normally crashes `tailscaled`. The installer detects this
+and falls back to **Tailscale userspace networking** so the node still joins the
+tailnet — at the cost of subnet-router / exit-node ability. For full kernel
+mode, pass TUN into the container from the host (e.g. Proxmox LXC):
+
+```
+# /etc/pve/lxc/<CTID>.conf
+lxc.cgroup2.devices.allow: c 10:200 rwm
+lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file 0 0
+```
+then restart the container and re-run the installer.
+
 ## Security
 
 - No credentials are committed to this repo.
