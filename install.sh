@@ -2,15 +2,24 @@
 #
 # hermes-ghl-installer
 # One-shot setup for a clean, headless Ubuntu server:
-#   1. Tailscale       (mesh VPN)
-#   2. Hermes agent    (NousResearch)
+#   1. Twingate Connector  (zero-trust remote access gateway)
+#   2. Hermes agent        (NousResearch)
 #   3. GoHighLevel CRM skill (contacts, social posting, calendar)
 #
 # Usage (one line, as the target user — NOT root):
 #   curl -fsSL https://raw.githubusercontent.com/prhall0603/hermes-ghl-installer/main/install.sh | bash
 #
+# The Twingate Connector needs three values from your Twingate Admin Console
+# (Network -> Connectors -> Deploy -> Linux). Export them BEFORE running to have
+# the installer wire it up automatically; otherwise the connector package is
+# installed and you finish setup by hand:
+#   export TWINGATE_NETWORK="yourslug"          # the 'yourslug' in yourslug.twingate.com
+#   export TWINGATE_ACCESS_TOKEN="..."
+#   export TWINGATE_REFRESH_TOKEN="..."
+#   curl -fsSL https://raw.githubusercontent.com/prhall0603/hermes-ghl-installer/main/install.sh | bash
+#
 # Idempotent: safe to re-run. Ships credential-free — you supply your own
-# Tailscale auth and GoHighLevel token after install (see the printed steps).
+# Twingate tokens and GoHighLevel token (see the printed steps).
 
 set -euo pipefail
 
@@ -33,42 +42,34 @@ if command -v apt-get >/dev/null 2>&1; then
   sudo apt-get install -y -qq git ca-certificates || warn "apt-get install failed; continuing"
 fi
 
-# --- 1. Tailscale -----------------------------------------------------------
-if command -v tailscale >/dev/null 2>&1; then
-  log "Tailscale already installed ($(tailscale version | head -1)); skipping."
+# --- 1. Twingate Connector --------------------------------------------------
+# The Connector is a zero-trust gateway: it runs entirely in USERSPACE and needs
+# NO /dev/net/tun, so it works in LXC/Docker containers with no host changes.
+# Its Linux install is a script from binaries.twingate.com that also expects the
+# three per-connector values generated in the Twingate Admin Console.
+TG_CONF="/etc/twingate/connector.conf"
+if systemctl list-unit-files 2>/dev/null | grep -q '^twingate-connector\.service' || [ -f "${TG_CONF}" ]; then
+  log "Twingate Connector already installed; skipping."
+elif [ -n "${TWINGATE_NETWORK:-}" ] && [ -n "${TWINGATE_ACCESS_TOKEN:-}" ] && [ -n "${TWINGATE_REFRESH_TOKEN:-}" ]; then
+  log "Installing + provisioning Twingate Connector (network: ${TWINGATE_NETWORK})…"
+  curl -fsSL "https://binaries.twingate.com/connector/setup.sh" \
+    | sudo TWINGATE_NETWORK="${TWINGATE_NETWORK}" \
+           TWINGATE_ACCESS_TOKEN="${TWINGATE_ACCESS_TOKEN}" \
+           TWINGATE_REFRESH_TOKEN="${TWINGATE_REFRESH_TOKEN}" \
+           TWINGATE_LABEL_DEPLOYED_BY="hermes-ghl-installer" bash \
+    || warn "Twingate setup script failed — verify tokens and network slug."
 else
-  log "Installing Tailscale…"
-  curl -fsSL https://tailscale.com/install.sh | sh
+  warn "No Twingate tokens in env — installing nothing for Twingate yet."
+  warn "  Finish setup from your Twingate Admin Console:"
+  warn "    Network -> Connectors -> (add) -> Deploy -> Linux, then run that command here."
+  warn "  Or re-run this installer with these exported first:"
+  warn "    TWINGATE_NETWORK / TWINGATE_ACCESS_TOKEN / TWINGATE_REFRESH_TOKEN"
 fi
-# TUN check: bare metal has /dev/net/tun; LXC/Docker containers often don't,
-# and tailscaled crashes there with 'CreateTUN failed; /dev/net/tun does not
-# exist'. Try to load the module; if still absent, fall back to userspace
-# networking so the node still joins the tailnet.
-if [ ! -c /dev/net/tun ]; then
-  sudo modprobe tun 2>/dev/null || true
-fi
-if [ ! -c /dev/net/tun ]; then
-  warn "No /dev/net/tun (container without TUN) — enabling Tailscale userspace networking."
-  warn "  Tradeoff: no subnet-router/exit-node. For full mode, pass TUN into the container from the host."
-  DEFAULTS="/etc/default/tailscaled"
-  sudo touch "${DEFAULTS}"
-  if grep -q '^FLAGS=' "${DEFAULTS}" 2>/dev/null; then
-    grep -q -- '--tun=userspace-networking' "${DEFAULTS}" \
-      || sudo sed -i 's|^FLAGS=.*|FLAGS="--tun=userspace-networking"|' "${DEFAULTS}"
-  else
-    echo 'FLAGS="--tun=userspace-networking"' | sudo tee -a "${DEFAULTS}" >/dev/null
-  fi
-fi
-
-# Ensure the tailscaled daemon is running + enabled on boot (systemd hosts).
-# The installer usually does this, but not on every image — `tailscale up`
-# fails with "failed to connect to local tailscaled" if it isn't running.
-if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | grep -q '^tailscaled\.service'; then
-  log "Enabling + (re)starting tailscaled daemon…"
-  sudo systemctl enable tailscaled >/dev/null 2>&1 || true
-  sudo systemctl restart tailscaled || warn "Could not start tailscaled; run: sudo systemctl restart tailscaled"
-else
-  warn "systemd/tailscaled service not detected — start the daemon manually before 'tailscale up'."
+# Safety net: make sure the connector service is enabled + running on boot.
+if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | grep -q '^twingate-connector\.service'; then
+  sudo systemctl enable --now twingate-connector 2>/dev/null \
+    || warn "Could not start twingate-connector; check: sudo systemctl status twingate-connector"
+  log "Twingate Connector service enabled (starts on boot)."
 fi
 
 # --- 1b. Node.js + npm ------------------------------------------------------
@@ -192,11 +193,13 @@ cat <<'EOF'
      source ~/.bashrc
    Verify:  command -v hermes
 
-1) Connect this machine to your Tailscale network:
-     sudo tailscale up
-   (opens a login URL — authorize it in your Tailscale account)
-   If it says "failed to connect to local tailscaled":
-     sudo systemctl enable --now tailscaled && sudo tailscale up
+1) Twingate Connector remote access:
+   - If you exported TWINGATE_NETWORK / ACCESS / REFRESH tokens, it is
+     already provisioned. Check it:
+       sudo systemctl status twingate-connector
+   - If not, open your Twingate Admin Console -> Network -> Connectors ->
+     Deploy -> Linux, and run that generated command here (or re-run this
+     installer with the three TWINGATE_* vars exported).
 
 2) Configure the Hermes agent:
      hermes setup            # or: hermes --help
